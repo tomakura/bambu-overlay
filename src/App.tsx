@@ -31,6 +31,7 @@ import {
   type KeyboardEvent,
   type SetStateAction,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -164,9 +165,27 @@ function amsHumidityLabel(snapshot: PrinterSnapshot) {
 
 function slotDetail(slot: PrinterSnapshot["amsSlots"][number]) {
   if (slot.empty) return "Empty";
-  const parts = [slot.filamentType || "Filament"];
+  const parts = [`AMS${slot.amsId + 1}-${slot.trayId + 1}`];
   if (slot.subBrand) parts.push(slot.subBrand);
   return parts.join(" · ");
+}
+
+function slotTypeLabel(slot: PrinterSnapshot["amsSlots"][number]) {
+  if (slot.empty) return "Empty";
+  return slot.filamentType || "Filament";
+}
+
+function measuredOverlayContentHeight(overlay: HTMLElement) {
+  return Array.from(overlay.children).reduce((height, child) => {
+    if (!(child instanceof HTMLElement)) return height;
+    const style = window.getComputedStyle(child);
+    if (style.display === "none" || style.position === "fixed" || style.position === "absolute") {
+      return height;
+    }
+    const marginTop = style.marginTop === "auto" ? 0 : Number.parseFloat(style.marginTop) || 0;
+    const marginBottom = style.marginBottom === "auto" ? 0 : Number.parseFloat(style.marginBottom) || 0;
+    return height + child.getBoundingClientRect().height + marginTop + marginBottom;
+  }, 0);
 }
 
 async function safeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -220,6 +239,7 @@ export default function App() {
   const [persistentError, setPersistentError] = useState<string | undefined>();
   const [connectingProfileId, setConnectingProfileId] = useState<string | undefined>();
   const dragState = useRef<{ lastX: number; lastY: number } | undefined>();
+  const overlayRef = useRef<HTMLElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const lastCompactRef = useRef(emptyPreferences.compact);
   const autoConnectProfileRef = useRef<string | undefined>();
@@ -330,15 +350,31 @@ export default function App() {
     safeInvoke("set_overlay_preferences", { preferences }).catch(() => undefined);
   }, [backendReady, bootstrapped, preferences]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!backendReady || !bootstrapped) return;
-    safeInvoke("set_window_layout", {
-      compact: preferences.compact,
-      expanded: amsExpanded,
-      settingsOpen,
-      alertsCount: snapshot?.alerts.length ?? 0,
-    }).catch(() => undefined);
-  }, [backendReady, bootstrapped, preferences.compact, amsExpanded, settingsOpen, snapshot?.alerts.length]);
+    const frame = window.requestAnimationFrame(() => {
+      const contentHeight = settingsOpen || !overlayRef.current
+        ? undefined
+        : measuredOverlayContentHeight(overlayRef.current);
+      safeInvoke("set_window_layout", {
+        compact: preferences.compact,
+        expanded: amsExpanded,
+        settingsOpen,
+        alertsCount: snapshot?.alerts.length ?? 0,
+        contentHeight,
+      }).catch(() => undefined);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    backendReady,
+    bootstrapped,
+    preferences.compact,
+    amsExpanded,
+    settingsOpen,
+    snapshot?.alerts.length,
+    snapshot?.amsSlots.length,
+    persistentError,
+  ]);
 
   useEffect(() => {
     if (!lastCompactRef.current && preferences.compact) {
@@ -482,7 +518,7 @@ export default function App() {
 
   return (
     <main className={cx("shell", preferences.compact && "is-compact", amsExpanded && "ams-expanded")} style={{ opacity: preferences.opacity }}>
-      <section className={cx("overlay", `tone-${tone}`)}>
+      <section ref={overlayRef} className={cx("overlay", `tone-${tone}`)}>
         <header className="overlay-header" onMouseDownCapture={startWindowDrag}>
           <div className="printer-identity">
             <div className="status-light" />
@@ -644,7 +680,7 @@ export default function App() {
                     <div key={`${slot.amsId}-${slot.trayId}`} className={cx("ams-slot", slot.active && "active", slot.empty && "empty")}>
                       <span className="swatch" style={{ backgroundColor: slot.color || "#1f2933" }} />
                       <div className="ams-slot-info">
-                        <strong>{slot.label}</strong>
+                        <strong>{slotTypeLabel(slot)}</strong>
                         <small title={slotDetail(slot)}>{slotDetail(slot)}</small>
                       </div>
                     </div>

@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(Get-Content \"C:\\\\Users\\\\Flow\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Flow-Programs-bambu-overlay\\\\e3521b72-f6a3-43e0-822c-12c2c8455f7c\\\\tasks\\\\bcfe98si5.output\" -Tail 40)",
+      "Bash(npx kill-port *)",
+      "Bash(pkill -f \"bambu-overlay.exe\")",
+      "Bash(pkill -f \"vite\")",
+      "Bash(target)",
+      "Bash(grep -E --line-buffered \"Running `target)",
+      "Bash(error\\\\[)",
+      "Bash(^error)",
+      "Bash(panicked)",
+      "Bash(finished in\")",
+      "Bash(grep -E --line-buffered \"Running \\\\`target|^error|error\\\\[|panicked|aborting\")",
+      "Bash(cargo build *)",
+      "Bash(npx tsc *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Flow\\\\Programs\\\\bambu-overlay\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(ConvertTo-Csv -NoTypeInformation)",
+      "Bash(Out-String)",
+      "Bash(git commit -m 'feat: initial release v1.0.0 *)",
+      "Bash(gh repo *)",
+      "Bash(gh run *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'fix: add missing tsconfig.node.json and update Cargo.lock *)",
+      "Bash(git push *)",
+      "Bash(git tag *)"
+    ]
+  }
+}

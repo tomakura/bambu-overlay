@@ -1,8 +1,7 @@
 use serde_json::Value;
 
 use crate::types::{
-    AlertLevel, AmsHumidity, AmsSlot, PrinterAlert, PrinterProfile, PrinterSnapshot,
-    PrinterStatus,
+    AlertLevel, AmsHumidity, AmsSlot, PrinterAlert, PrinterProfile, PrinterSnapshot, PrinterStatus,
 };
 
 pub fn merge_report(
@@ -152,23 +151,56 @@ pub fn merge_report(
 
 fn parse_ams_slots(print: &Value) -> Option<Vec<AmsSlot>> {
     let ams = print.get("ams")?;
-    let active = u64_field(ams, "tray_now");
+    let active = u64_field(ams, "tray_now").or_else(|| u64_field(ams, "tray_tar"));
+    let active_pair = active_ams_slot(ams);
     let units = ams.get("ams")?.as_array()?;
     let mut slots = Vec::new();
-    for unit in units {
-        let ams_id = u64_field(unit, "id").unwrap_or(slots.len() as u64);
-        let Some(trays) = unit.get("tray").and_then(Value::as_array) else {
+    for (unit_index, unit) in units.iter().enumerate() {
+        let ams_id = u64_field_any(unit, &["id", "ams_id", "amsId"]).unwrap_or(unit_index as u64);
+        let Some(trays) = tray_entries(unit) else {
             continue;
         };
-        for (tray_index, tray) in trays.iter().enumerate() {
-            let tray_id = u64_field(tray, "id").unwrap_or(0);
+        for (tray_index, tray) in trays {
+            let tray_id =
+                u64_field_any(tray, &["id", "tray_id", "trayId"]).unwrap_or(tray_index as u64);
             let color = normalize_color(
-                str_field(tray, "tray_color")
-                    .as_deref()
-                    .unwrap_or("00000000"),
+                str_field_any(
+                    tray,
+                    &[
+                        "tray_color",
+                        "trayColor",
+                        "color",
+                        "filament_color",
+                        "filamentColor",
+                    ],
+                )
+                .as_deref()
+                .unwrap_or("00000000"),
             );
-            let filament_type = str_field(tray, "tray_type").filter(|value| !value.is_empty());
-            let sub_brand = str_field(tray, "tray_sub_brands").filter(|value| !value.is_empty());
+            let filament_type = str_field_any(
+                tray,
+                &[
+                    "tray_type",
+                    "trayType",
+                    "filament_type",
+                    "filamentType",
+                    "filament",
+                    "material",
+                    "type",
+                ],
+            )
+            .filter(|value| !value.is_empty());
+            let sub_brand = str_field_any(
+                tray,
+                &[
+                    "tray_sub_brands",
+                    "traySubBrands",
+                    "sub_brand",
+                    "subBrand",
+                    "brand",
+                ],
+            )
+            .filter(|value| !value.is_empty());
             let empty = filament_type.is_none()
                 && str_field(tray, "tray_info_idx")
                     .unwrap_or_default()
@@ -181,15 +213,76 @@ fn parse_ams_slots(print: &Value) -> Option<Vec<AmsSlot>> {
                 filament_type,
                 sub_brand,
                 color,
-                remaining: u64_field(tray, "remain"),
-                nozzle_min: f64_field(tray, "nozzle_temp_min"),
-                nozzle_max: f64_field(tray, "nozzle_temp_max"),
-                active: active == Some(absolute_slot),
+                remaining: u64_field_any(
+                    tray,
+                    &[
+                        "remain",
+                        "remaining",
+                        "remaining_percent",
+                        "remainingPercent",
+                    ],
+                ),
+                nozzle_min: f64_field_any(tray, &["nozzle_temp_min", "nozzleTempMin"]),
+                nozzle_max: f64_field_any(tray, &["nozzle_temp_max", "nozzleTempMax"]),
+                active: active == Some(absolute_slot) || active_pair == Some((ams_id, tray_id)),
                 empty,
             });
         }
     }
     Some(slots)
+}
+
+fn tray_entries(unit: &Value) -> Option<Vec<(usize, &Value)>> {
+    for key in ["tray", "trays", "slots"] {
+        let Some(collection) = unit.get(key) else {
+            continue;
+        };
+        match collection {
+            Value::Array(items) => {
+                return Some(items.iter().enumerate().collect());
+            }
+            Value::Object(map) => {
+                let mut entries = map
+                    .iter()
+                    .filter(|(_, value)| value.is_object())
+                    .map(|(key, value)| (slot_index_from_key(key).unwrap_or(usize::MAX), value))
+                    .collect::<Vec<_>>();
+                entries.sort_by_key(|(index, _)| *index);
+                return Some(
+                    entries
+                        .into_iter()
+                        .enumerate()
+                        .map(|(fallback, (index, value))| {
+                            if index == usize::MAX {
+                                (fallback, value)
+                            } else {
+                                (index, value)
+                            }
+                        })
+                        .collect(),
+                );
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn active_ams_slot(ams: &Value) -> Option<(u64, u64)> {
+    let value = str_field(ams, "tray_now").or_else(|| str_field(ams, "tray_tar"))?;
+    let normalized = value.replace('_', "-").replace(':', "-");
+    let mut parts = normalized.split('-');
+    let ams_id = parts.next()?.trim().parse::<u64>().ok()?;
+    let tray_id = parts.next()?.trim().parse::<u64>().ok()?;
+    Some((ams_id, tray_id))
+}
+
+fn slot_index_from_key(key: &str) -> Option<usize> {
+    key.chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect::<String>()
+        .parse::<usize>()
+        .ok()
 }
 
 fn parse_ams_humidity(print: &Value) -> Option<Vec<AmsHumidity>> {
@@ -295,12 +388,20 @@ fn str_field(value: &Value, key: &str) -> Option<String> {
     })
 }
 
+fn str_field_any(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| str_field(value, key))
+}
+
 fn u64_field(value: &Value, key: &str) -> Option<u64> {
     value.get(key).and_then(|field| match field {
         Value::Number(value) => value.as_u64(),
         Value::String(value) => value.trim().parse::<u64>().ok(),
         _ => None,
     })
+}
+
+fn u64_field_any(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| u64_field(value, key))
 }
 
 fn f64_field(value: &Value, key: &str) -> Option<f64> {
@@ -463,5 +564,33 @@ mod tests {
         );
 
         assert!(snapshot.ams_humidity.is_empty());
+    }
+
+    #[test]
+    fn captures_ams_slots_from_object_trays_and_alt_filament_keys() {
+        let profile = profile();
+        let snapshot = merge_report(
+            &profile,
+            None,
+            &json!({
+                "print": {
+                    "ams": {
+                        "tray_now": "0-1",
+                        "ams": [{
+                            "id": "0",
+                            "trays": {
+                                "tray0": { "tray_id": "0", "filamentType": "PLA", "color": "FF0000FF" },
+                                "tray1": { "tray_id": "1", "material": "PETG", "filamentColor": "00FF00FF" }
+                            }
+                        }]
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(snapshot.ams_slots.len(), 2);
+        assert_eq!(snapshot.ams_slots[0].filament_type.as_deref(), Some("PLA"));
+        assert_eq!(snapshot.ams_slots[1].filament_type.as_deref(), Some("PETG"));
+        assert!(snapshot.ams_slots[1].active);
     }
 }

@@ -32,6 +32,7 @@ const SETTINGS_WINDOW_HEIGHT: f64 = 560.0;
 const COMPACT_WINDOW_WIDTH: f64 = 560.0;
 const COMPACT_WINDOW_HEIGHT: f64 = 208.0;
 const COMPACT_EXPANDED_WINDOW_HEIGHT: f64 = 284.0;
+const WINDOW_CONTENT_PAD: f64 = 2.0;
 
 #[derive(Default)]
 struct RuntimeState {
@@ -400,10 +401,16 @@ fn normal_expanded_height(alerts_count: usize) -> f64 {
     if alerts_count == 0 {
         return NORMAL_WINDOW_HEIGHT_BASE;
     }
-    let alerts_height = 8.0
-        + (alerts_count as f64 * 40.0)
-        + (alerts_count.saturating_sub(1) as f64 * 6.0);
+    let alerts_height =
+        8.0 + (alerts_count as f64 * 40.0) + (alerts_count.saturating_sub(1) as f64 * 6.0);
     (NORMAL_WINDOW_HEIGHT_BASE + alerts_height).min(650.0)
+}
+
+fn measured_window_height(content_height: Option<f64>, fallback: f64, min: f64, max: f64) -> f64 {
+    content_height
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .map(|height| (height + WINDOW_CONTENT_PAD).ceil().clamp(min, max))
+        .unwrap_or(fallback)
 }
 
 #[tauri::command]
@@ -412,6 +419,7 @@ fn set_window_layout(
     expanded: bool,
     settings_open: bool,
     alerts_count: usize,
+    content_height: Option<f64>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
@@ -422,13 +430,40 @@ fn set_window_layout(
                 (SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT)
             }
         } else if compact && expanded {
-            (COMPACT_WINDOW_WIDTH, COMPACT_EXPANDED_WINDOW_HEIGHT)
+            (
+                COMPACT_WINDOW_WIDTH,
+                measured_window_height(
+                    content_height,
+                    COMPACT_EXPANDED_WINDOW_HEIGHT,
+                    210.0,
+                    360.0,
+                ),
+            )
         } else if compact {
-            (COMPACT_WINDOW_WIDTH, COMPACT_WINDOW_HEIGHT)
+            (
+                COMPACT_WINDOW_WIDTH,
+                measured_window_height(content_height, COMPACT_WINDOW_HEIGHT, 154.0, 260.0),
+            )
         } else if expanded {
-            (NORMAL_WINDOW_WIDTH, normal_expanded_height(alerts_count))
+            (
+                NORMAL_WINDOW_WIDTH,
+                measured_window_height(
+                    content_height,
+                    normal_expanded_height(alerts_count),
+                    420.0,
+                    650.0,
+                ),
+            )
         } else {
-            (NORMAL_WINDOW_WIDTH, NORMAL_COLLAPSED_WINDOW_HEIGHT)
+            (
+                NORMAL_WINDOW_WIDTH,
+                measured_window_height(
+                    content_height,
+                    NORMAL_COLLAPSED_WINDOW_HEIGHT,
+                    286.0,
+                    390.0,
+                ),
+            )
         };
         window
             .set_size(Size::Logical(LogicalSize::new(width, height)))
