@@ -25,14 +25,17 @@ const MENU_SHOW: &str = "show-window";
 const MENU_DISABLE_CLICK_THROUGH: &str = "disable-click-through";
 const MENU_QUIT: &str = "quit";
 const NORMAL_WINDOW_WIDTH: f64 = 430.0;
-const NORMAL_WINDOW_HEIGHT_BASE: f64 = 500.0;
-const NORMAL_COLLAPSED_WINDOW_HEIGHT: f64 = 332.0;
+// 実測が取れないときのフォールバック。実際のレイアウト実測値に合わせてある。
+const NORMAL_WINDOW_HEIGHT_BASE: f64 = 440.0;
+const NORMAL_COLLAPSED_WINDOW_HEIGHT: f64 = 310.0;
 const SETTINGS_WINDOW_WIDTH: f64 = 430.0;
 const SETTINGS_WINDOW_HEIGHT: f64 = 560.0;
 const COMPACT_WINDOW_WIDTH: f64 = 560.0;
-const COMPACT_WINDOW_HEIGHT: f64 = 208.0;
-const COMPACT_EXPANDED_WINDOW_HEIGHT: f64 = 284.0;
+const COMPACT_WINDOW_HEIGHT: f64 = 172.0;
+const COMPACT_EXPANDED_WINDOW_HEIGHT: f64 = 225.0;
 const WINDOW_CONTENT_PAD: f64 = 2.0;
+/// 実測に追従させるための安全弁。ここに当たると内容が切れるので余裕を持たせる。
+const MAX_WINDOW_HEIGHT: f64 = 900.0;
 
 #[derive(Default)]
 struct RuntimeState {
@@ -403,7 +406,7 @@ fn normal_expanded_height(alerts_count: usize) -> f64 {
     }
     let alerts_height =
         8.0 + (alerts_count as f64 * 40.0) + (alerts_count.saturating_sub(1) as f64 * 6.0);
-    (NORMAL_WINDOW_HEIGHT_BASE + alerts_height).min(650.0)
+    (NORMAL_WINDOW_HEIGHT_BASE + alerts_height).min(MAX_WINDOW_HEIGHT)
 }
 
 fn measured_window_height(content_height: Option<f64>, fallback: f64, min: f64, max: f64) -> f64 {
@@ -423,26 +426,28 @@ fn set_window_layout(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
+        // 設定は内容量が多いので、コンパクト表示中でも通常サイズで開く
         let (width, height) = if settings_open {
-            if compact {
-                (COMPACT_WINDOW_WIDTH, COMPACT_EXPANDED_WINDOW_HEIGHT)
-            } else {
-                (SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT)
-            }
+            (SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT)
         } else if compact && expanded {
             (
                 COMPACT_WINDOW_WIDTH,
                 measured_window_height(
                     content_height,
                     COMPACT_EXPANDED_WINDOW_HEIGHT,
-                    210.0,
-                    360.0,
+                    170.0,
+                    MAX_WINDOW_HEIGHT,
                 ),
             )
         } else if compact {
             (
                 COMPACT_WINDOW_WIDTH,
-                measured_window_height(content_height, COMPACT_WINDOW_HEIGHT, 154.0, 260.0),
+                measured_window_height(
+                    content_height,
+                    COMPACT_WINDOW_HEIGHT,
+                    130.0,
+                    MAX_WINDOW_HEIGHT,
+                ),
             )
         } else if expanded {
             (
@@ -450,8 +455,8 @@ fn set_window_layout(
                 measured_window_height(
                     content_height,
                     normal_expanded_height(alerts_count),
-                    420.0,
-                    650.0,
+                    300.0,
+                    MAX_WINDOW_HEIGHT,
                 ),
             )
         } else {
@@ -460,8 +465,8 @@ fn set_window_layout(
                 measured_window_height(
                     content_height,
                     NORMAL_COLLAPSED_WINDOW_HEIGHT,
-                    286.0,
-                    390.0,
+                    220.0,
+                    MAX_WINDOW_HEIGHT,
                 ),
             )
         };

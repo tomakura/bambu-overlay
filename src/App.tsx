@@ -58,6 +58,8 @@ interface CloudFormState {
   devices: CloudLoginDevice[];
 }
 
+type RecoveryIntent = "reauth" | "missing-secret" | "connection" | undefined;
+
 const emptyPreferences: OverlayPreferences = {
   alwaysOnTop: true,
   clickThrough: false,
@@ -74,6 +76,56 @@ const emptyCloudFormState: CloudFormState = {
   devices: [],
 };
 
+const mockProfile: PrinterProfile = {
+  id: "mock-profile",
+  name: "P1S Mock",
+  mode: "lan",
+  ip: "127.0.0.1",
+  serial: "MOCK123456",
+  createdAt: "2026-05-19T00:00:00Z",
+  updatedAt: "2026-05-19T00:00:00Z",
+};
+
+const mockSnapshot: PrinterSnapshot = {
+  profileId: mockProfile.id,
+  printerName: mockProfile.name,
+  mode: "lan",
+  connected: true,
+  lastUpdated: new Date().toISOString(),
+  status: "printing",
+  rawState: "RUNNING",
+  statusLabel: "印刷中",
+  jobName: "ams-layout-smoke-test.3mf",
+  progress: 67,
+  remainingMinutes: 94,
+  currentLayer: 126,
+  totalLayers: 188,
+  nozzleTemp: 219.5,
+  nozzleTarget: 220,
+  bedTemp: 59.7,
+  bedTarget: 60,
+  chamberTemp: 35.2,
+  chamberTarget: undefined,
+  speedPercent: 100,
+  speedLevel: 2,
+  wifiSignal: "-56 dBm",
+  amsHumidity: [{ amsId: 0, humidityPercent: 28 }],
+  amsSlots: [
+    { amsId: 0, trayId: 0, label: "1", filamentType: "PLA", subBrand: "Matte White", color: "#f4f4ef", remaining: 76, nozzleMin: 190, nozzleMax: 230, active: false, empty: false },
+    { amsId: 0, trayId: 1, label: "2", filamentType: "PETG", subBrand: "Clear", color: "#79d5ff", remaining: 42, nozzleMin: 230, nozzleMax: 260, active: true, empty: false },
+    { amsId: 0, trayId: 2, label: "3", filamentType: "ASA", subBrand: "Black", color: "#1b1d1f", remaining: 58, nozzleMin: 240, nozzleMax: 280, active: false, empty: false },
+    { amsId: 0, trayId: 3, label: "4", color: "#2a2f31", active: false, empty: true },
+  ],
+  alerts: [
+    { code: "mock-warning", level: "warning", message: "Mock: AMS payload and window height smoke" },
+  ],
+};
+
+function isMockMode() {
+  return import.meta.env.VITE_BAMBU_OVERLAY_MOCK === "1"
+    || new URLSearchParams(window.location.search).get("mock") === "1";
+}
+
 function cx(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -88,12 +140,12 @@ function formatRemaining(minutes?: number) {
 }
 
 function formatFinishTime(minutes?: number) {
-  if (minutes == null || Number.isNaN(minutes)) return "完了 --:--";
+  if (minutes == null || Number.isNaN(minutes)) return "--:--";
   const now = new Date();
   const finish = new Date(now.getTime() + Math.max(0, Math.round(minutes)) * 60_000);
   const hhmm = `${finish.getHours().toString().padStart(2, "0")}:${finish.getMinutes().toString().padStart(2, "0")}`;
-  if (finish.toDateString() === now.toDateString()) return `完了 ${hhmm}`;
-  return `完了 ${finish.getMonth() + 1}/${finish.getDate()} ${hhmm}`;
+  if (finish.toDateString() === now.toDateString()) return hhmm;
+  return `${finish.getMonth() + 1}/${finish.getDate()} ${hhmm}`;
 }
 
 function formatCompactFinishTime(minutes?: number) {
@@ -164,7 +216,7 @@ function amsHumidityLabel(snapshot: PrinterSnapshot) {
 }
 
 function slotDetail(slot: PrinterSnapshot["amsSlots"][number]) {
-  if (slot.empty) return "Empty";
+  if (slot.empty) return `AMS${slot.amsId + 1}-${slot.trayId + 1}`;
   const parts = [`AMS${slot.amsId + 1}-${slot.trayId + 1}`];
   if (slot.subBrand) parts.push(slot.subBrand);
   return parts.join(" · ");
@@ -175,6 +227,16 @@ function slotTypeLabel(slot: PrinterSnapshot["amsSlots"][number]) {
   return slot.filamentType || "Filament";
 }
 
+// getComputedStyle は margin:auto を「使用値」(= 余った領域の分だけ膨らんだ px) で返すため、
+// 文字列比較では auto を判別できない。computedStyleMap は計算値を返すのでキーワードのまま拾える。
+function marginWithoutAuto(child: HTMLElement, style: CSSStyleDeclaration, side: "top" | "bottom") {
+  const typed = child.computedStyleMap?.().get(`margin-${side}`);
+  if (typed?.toString() === "auto") return 0;
+  const raw = side === "top" ? style.marginTop : style.marginBottom;
+  if (raw === "auto") return 0;
+  return Number.parseFloat(raw) || 0;
+}
+
 function measuredOverlayContentHeight(overlay: HTMLElement) {
   return Array.from(overlay.children).reduce((height, child) => {
     if (!(child instanceof HTMLElement)) return height;
@@ -182,10 +244,20 @@ function measuredOverlayContentHeight(overlay: HTMLElement) {
     if (style.display === "none" || style.position === "fixed" || style.position === "absolute") {
       return height;
     }
-    const marginTop = style.marginTop === "auto" ? 0 : Number.parseFloat(style.marginTop) || 0;
-    const marginBottom = style.marginBottom === "auto" ? 0 : Number.parseFloat(style.marginBottom) || 0;
-    return height + child.getBoundingClientRect().height + marginTop + marginBottom;
+    return height
+      + child.getBoundingClientRect().height
+      + marginWithoutAuto(child, style, "top")
+      + marginWithoutAuto(child, style, "bottom");
   }, 0);
+}
+
+function classifyRecoveryIntent(message: string | undefined): RecoveryIntent {
+  if (!message) return undefined;
+  const lower = message.toLocaleLowerCase();
+  if (message.includes("Cloud認証") || lower.includes("401") || lower.includes("unauthorized")) return "reauth";
+  if (message.includes("安全な保存領域") || message.includes("認証情報") || lower.includes("secure storage")) return "missing-secret";
+  if (message.includes("接続失敗") || lower.includes("mqtt") || lower.includes("timed out")) return "connection";
+  return undefined;
 }
 
 async function safeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -234,6 +306,7 @@ export default function App() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [bootstrapped, setBootstrapped] = useState(false);
   const [backendReady, setBackendReady] = useState(true);
+  const [mockMode] = useState(isMockMode);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | undefined>();
   const [persistentError, setPersistentError] = useState<string | undefined>();
@@ -250,6 +323,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (mockMode) {
+      setProfiles([mockProfile]);
+      setSelectedProfileId(mockProfile.id);
+      setSnapshot(mockSnapshot);
+      setPreferences(emptyPreferences);
+      setSettingsOpen(false);
+      setBootstrapped(true);
+      return;
+    }
     safeInvoke<AppBootstrap>("get_app_bootstrap")
       .then((bootstrap) => {
         setProfiles(bootstrap.profiles);
@@ -268,7 +350,7 @@ export default function App() {
         setSettingsOpen(false);
         setBootstrapped(true);
       });
-  }, []);
+  }, [mockMode]);
 
   useEffect(() => {
     function moveWindow(event: MouseEvent) {
@@ -303,7 +385,7 @@ export default function App() {
   }, [connectingProfileId]);
 
   useEffect(() => {
-    if (!backendReady) return;
+    if (!backendReady || mockMode) return;
     let unlisten: (() => void) | undefined;
     let unlistenPrefs: (() => void) | undefined;
     listen<PrinterSnapshot>("snapshot-updated", (event) => {
@@ -343,31 +425,45 @@ export default function App() {
       unlisten?.();
       unlistenPrefs?.();
     };
-  }, [backendReady]);
+  }, [backendReady, mockMode]);
 
   useEffect(() => {
-    if (!backendReady || !bootstrapped) return;
+    if (!backendReady || !bootstrapped || mockMode) return;
     safeInvoke("set_overlay_preferences", { preferences }).catch(() => undefined);
-  }, [backendReady, bootstrapped, preferences]);
+  }, [backendReady, bootstrapped, mockMode, preferences]);
 
   useLayoutEffect(() => {
-    if (!backendReady || !bootstrapped) return;
-    const frame = window.requestAnimationFrame(() => {
-      const contentHeight = settingsOpen || !overlayRef.current
-        ? undefined
-        : measuredOverlayContentHeight(overlayRef.current);
-      safeInvoke("set_window_layout", {
-        compact: preferences.compact,
-        expanded: amsExpanded,
-        settingsOpen,
-        alertsCount: snapshot?.alerts.length ?? 0,
-        contentHeight,
-      }).catch(() => undefined);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    if (!backendReady || !bootstrapped || mockMode) return;
+    const overlay = overlayRef.current;
+    let frame = 0;
+    function pushLayout() {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const contentHeight = settingsOpen || !overlay
+          ? undefined
+          : measuredOverlayContentHeight(overlay);
+        safeInvoke("set_window_layout", {
+          compact: preferences.compact,
+          expanded: amsExpanded,
+          settingsOpen,
+          alertsCount: snapshot?.alerts.length ?? 0,
+          contentHeight,
+        }).catch(() => undefined);
+      });
+    }
+    pushLayout();
+    if (!overlay || settingsOpen) return () => window.cancelAnimationFrame(frame);
+    // 文字の折り返しやチップの増減でも高さが変わるので、実測を監視して追従する
+    const observer = new ResizeObserver(pushLayout);
+    Array.from(overlay.children).forEach((child) => observer.observe(child));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [
     backendReady,
     bootstrapped,
+    mockMode,
     preferences.compact,
     amsExpanded,
     settingsOpen,
@@ -405,9 +501,10 @@ export default function App() {
   const freshness = formatFreshness(displaySnapshot.lastUpdated, nowMs);
   const humidityLabel = amsHumidityLabel(displaySnapshot);
   const isFirstRun = bootstrapped && profiles.length === 0;
+  const recoveryIntent = classifyRecoveryIntent(persistentError);
 
   useEffect(() => {
-    if (!backendReady || !bootstrapped || isFirstRun || settingsOpen || busy || connectingProfileId) return;
+    if (!backendReady || !bootstrapped || mockMode || isFirstRun || settingsOpen || busy || connectingProfileId) return;
     if (!activeProfile?.id) return;
     if (displaySnapshot.connected || displaySnapshot.status === "connecting") return;
     if (autoConnectProfileRef.current === activeProfile.id) return;
@@ -422,11 +519,12 @@ export default function App() {
     displaySnapshot.connected,
     displaySnapshot.status,
     isFirstRun,
+    mockMode,
     settingsOpen,
   ]);
 
   async function connect(profileId = activeProfile?.id) {
-    if (!profileId || !backendReady) return;
+    if (!profileId || !backendReady || mockMode) return;
     setBusy(true);
     setPersistentError(undefined);
     setToast(undefined);
@@ -442,7 +540,8 @@ export default function App() {
       }
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
-      if (text.includes("認証情報") || text.includes("安全な保存領域")) {
+      const recovery = classifyRecoveryIntent(text);
+      if (recovery === "reauth" || recovery === "missing-secret") {
         setSettingsTab("printer");
         openSettings();
       }
@@ -453,7 +552,7 @@ export default function App() {
   }
 
   async function disconnect() {
-    if (!backendReady) return;
+    if (!backendReady || mockMode) return;
     setBusy(true);
     setPersistentError(undefined);
     setConnectingProfileId(undefined);
@@ -472,7 +571,7 @@ export default function App() {
   }
 
   async function refreshProfiles() {
-    if (!backendReady) return;
+    if (!backendReady || mockMode) return;
     const bootstrap = await safeInvoke<AppBootstrap>("get_app_bootstrap");
     setProfiles(bootstrap.profiles);
     setSelectedProfileId(bootstrap.selectedProfileId);
@@ -481,7 +580,7 @@ export default function App() {
   }
 
   async function deleteProfile(profileId: string) {
-    if (!backendReady) return;
+    if (!backendReady || mockMode) return;
     setBusy(true);
     setPersistentError(undefined);
     try {
@@ -522,22 +621,12 @@ export default function App() {
         <header className="overlay-header" onMouseDownCapture={startWindowDrag}>
           <div className="printer-identity">
             <div className="status-light" />
-            <span className="state-pill">{displaySnapshot.statusLabel}</span>
             <h1 title={displaySnapshot.printerName || activeProfile?.name || "Bambu Printer"}>
               {displaySnapshot.printerName || activeProfile?.name || "Bambu Printer"}
             </h1>
+            <span className="state-pill">{displaySnapshot.statusLabel}</span>
+            {busy && <Loader2 className="spin" size={14} aria-label="処理中" />}
           </div>
-          {(busy || mainAlert) && (
-            <div className="header-status">
-              {busy && <Loader2 className="spin" size={14} aria-label="処理中" />}
-              {mainAlert && (
-                <span className={cx("alert-chip", mainAlert.level)} title={mainAlert.message}>
-                  <AlertTriangle size={12} />
-                  {alertText(mainAlert, displaySnapshot.alerts.length)}
-                </span>
-              )}
-            </div>
-          )}
           <div className="header-actions">
             <button
               className="icon-button"
@@ -621,13 +710,37 @@ export default function App() {
           <div className="persistent-error" role="alert">
             <AlertTriangle size={15} />
             <span>{persistentError}</span>
-            <button type="button" onClick={() => connect()} disabled={!activeProfile || busy}>
+            <button type="button" onClick={() => connect()} disabled={!activeProfile || busy || mockMode}>
               再接続
             </button>
-            <button type="button" onClick={openSettings}>
-              設定
+            <button
+              type="button"
+              onClick={() => {
+                setSettingsTab(recoveryIntent === "reauth" || recoveryIntent === "missing-secret" ? "printer" : "display");
+                openSettings();
+              }}
+            >
+              {recoveryIntent === "reauth" ? "Cloud再認証" : recoveryIntent === "missing-secret" ? "再登録" : "確認"}
             </button>
           </div>
+        )}
+
+        {displaySnapshot.alerts.length > 0 && (
+          <section className="alerts">
+            {preferences.compact
+              ? mainAlert && (
+                  <div className={cx("alert-row", mainAlert.level)} title={mainAlert.message}>
+                    <AlertTriangle size={14} />
+                    <span>{alertText(mainAlert, displaySnapshot.alerts.length)}</span>
+                  </div>
+                )
+              : displaySnapshot.alerts.map((alert) => (
+                  <div key={alert.code} className={cx("alert-row", alert.level)} title={alert.message}>
+                    <AlertTriangle size={14} />
+                    <span>{alert.message}</span>
+                  </div>
+                ))}
+          </section>
         )}
 
         <div className="metrics-grid">
@@ -666,40 +779,27 @@ export default function App() {
         </div>
 
         {amsExpanded && (
-          <>
-            <section className="ams-panel">
-              <div className="section-title">
-                <span>AMS</span>
-                <small>{humidityLabel ?? (displaySnapshot.amsSlots.length === 0 ? "not detected" : undefined)}</small>
-              </div>
-              <div className="ams-grid">
-                {displaySnapshot.amsSlots.length === 0 ? (
-                  <div className="empty-ams">AMS情報なし</div>
-                ) : (
-                  displaySnapshot.amsSlots.map((slot) => (
-                    <div key={`${slot.amsId}-${slot.trayId}`} className={cx("ams-slot", slot.active && "active", slot.empty && "empty")}>
-                      <span className="swatch" style={{ backgroundColor: slot.color || "#1f2933" }} />
-                      <div className="ams-slot-info">
-                        <strong>{slotTypeLabel(slot)}</strong>
-                        <small title={slotDetail(slot)}>{slotDetail(slot)}</small>
-                      </div>
+          <section className="ams-panel">
+            <div className="section-title">
+              <span>AMS</span>
+              <small>{humidityLabel ?? (displaySnapshot.amsSlots.length === 0 ? "not detected" : undefined)}</small>
+            </div>
+            <div className="ams-grid">
+              {displaySnapshot.amsSlots.length === 0 ? (
+                <div className="empty-ams">AMS情報なし</div>
+              ) : (
+                displaySnapshot.amsSlots.map((slot) => (
+                  <div key={`${slot.amsId}-${slot.trayId}`} className={cx("ams-slot", slot.active && "active", slot.empty && "empty")}>
+                    <span className="swatch" style={{ backgroundColor: slot.color || "#1f2933" }} />
+                    <div className="ams-slot-info">
+                      <strong>{slotTypeLabel(slot)}</strong>
+                      <small title={slotDetail(slot)}>{slotDetail(slot)}</small>
                     </div>
-                  ))
-                )}
-              </div>
-            </section>
-
-            {displaySnapshot.alerts.length > 0 && (
-              <section className="alerts">
-                {displaySnapshot.alerts.map((alert) => (
-                  <div key={alert.code} className={cx("alert-row", alert.level)}>
-                    <AlertTriangle size={15} />
-                    <span>{alert.message}</span>
                   </div>
-                ))}
-              </section>
-            )}
-          </>
+                ))
+              )}
+            </div>
+          </section>
         )}
 
         <footer className="footer-bar">
@@ -727,6 +827,7 @@ export default function App() {
       </section>
 
       {!backendReady && <div className="dev-banner">Tauri未接続</div>}
+      {mockMode && <div className="dev-banner">Mock mode</div>}
       {toast && (
         <div className="toast" role="status" aria-live="polite" onAnimationEnd={() => setToast(undefined)}>
           {toast}
@@ -746,6 +847,7 @@ export default function App() {
           cloudForm={cloudForm}
           setCloudForm={setCloudForm}
           backendReady={backendReady}
+          mockMode={mockMode}
           firstRun={isFirstRun}
           onClose={closeSettings}
           onStartWindowDrag={startWindowDrag}
@@ -813,6 +915,7 @@ function SettingsPanel({
   cloudForm,
   setCloudForm,
   backendReady,
+  mockMode,
   firstRun,
   onClose,
   onStartWindowDrag,
@@ -834,6 +937,7 @@ function SettingsPanel({
   cloudForm: CloudFormState;
   setCloudForm: Dispatch<SetStateAction<CloudFormState>>;
   backendReady: boolean;
+  mockMode: boolean;
   firstRun: boolean;
   onClose: () => void;
   onStartWindowDrag: (event: React.MouseEvent<HTMLElement>) => void;
@@ -973,6 +1077,7 @@ function SettingsPanel({
             preferences={preferences}
             setPreferences={setPreferences}
             backendReady={backendReady}
+            mockMode={mockMode}
             setToast={setToast}
             setPersistentError={setPersistentError}
           />
@@ -1352,17 +1457,21 @@ function DisplayForm({
   preferences,
   setPreferences,
   backendReady,
+  mockMode,
   setToast,
   setPersistentError,
 }: {
   preferences: OverlayPreferences;
   setPreferences: (preferences: OverlayPreferences) => void;
   backendReady: boolean;
+  mockMode: boolean;
   setToast: (message?: string) => void;
   setPersistentError: (message?: string) => void;
 }) {
   const [confirmClickThrough, setConfirmClickThrough] = useState(false);
   const [formError, setFormError] = useState<string | undefined>();
+  const [rawPayload, setRawPayload] = useState<string | undefined>();
+  const [diagnosticStatus, setDiagnosticStatus] = useState<string | undefined>();
 
   function update(next: OverlayPreferences) {
     setPreferences(next);
@@ -1370,9 +1479,31 @@ function DisplayForm({
     setPersistentError(undefined);
   }
 
+  async function loadRawPayload() {
+    setFormError(undefined);
+    setDiagnosticStatus(undefined);
+    if (mockMode) {
+      setRawPayload(JSON.stringify({ print: { ams: { tray_now: "1", ams: [{ id: "0", tray: mockSnapshot.amsSlots }] } } }, null, 2));
+      setDiagnosticStatus("Mock AMS payloadを表示しています");
+      return;
+    }
+    if (!backendReady) {
+      setFormError("デスクトップ版でAMS payloadを確認できます");
+      return;
+    }
+    try {
+      const payload = await safeInvoke<string | undefined>("get_last_raw_payload");
+      setRawPayload(payload);
+      setDiagnosticStatus(payload ? "直近の実機payloadを取得しました" : "まだ実機payloadを受信していません");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <div className="settings-form">
       {formError && <div className="form-error" role="alert">{formError}</div>}
+      {mockMode && <div className="diagnostic-box">Mock専用起動中です。実機接続や設定保存は行いません。</div>}
       <label className="toggle-row">
         <span>常時最前面</span>
         <input
@@ -1432,6 +1563,16 @@ function DisplayForm({
           onChange={(event) => update({ ...preferences, opacity: Number(event.target.value) })}
         />
       </label>
+      <div className="diagnostic-box">
+        <div>
+          <strong>AMS payload</strong>
+          <span>{diagnosticStatus || "実機の直近payloadを確認できます"}</span>
+        </div>
+        <button className="secondary-button" type="button" onClick={loadRawPayload}>
+          確認
+        </button>
+        {rawPayload && <pre>{rawPayload}</pre>}
+      </div>
     </div>
   );
 }
