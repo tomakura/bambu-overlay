@@ -81,7 +81,13 @@ pub async fn start_mqtt_task(
 ) {
     let mut backoff_secs = 2u64;
     loop {
-        let result = run_mqtt(config.clone(), profile.clone(), runtime.clone(), app.clone()).await;
+        let result = run_mqtt(
+            config.clone(),
+            profile.clone(),
+            runtime.clone(),
+            app.clone(),
+        )
+        .await;
         if let Err(error) = result {
             let snapshot = PrinterSnapshot::offline(&profile, &format!("接続失敗: {error}"));
             {
@@ -141,11 +147,15 @@ async fn run_mqtt(
                         if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&publish.payload) {
                             let current = runtime.read().await.snapshot.clone();
                             let snapshot = merge_report(&profile, current, &value);
-                            let has_temps = value.get("print")
-                                .map(|p| p.get("nozzle_temper").is_some() || p.get("bed_temper").is_some())
+                            let useful_diagnostic = value.get("print")
+                                .map(|p| {
+                                    p.get("ams").is_some()
+                                        || p.get("nozzle_temper").is_some()
+                                        || p.get("bed_temper").is_some()
+                                })
                                 .unwrap_or(false);
                             let mut rt = runtime.write().await;
-                            if has_temps {
+                            if useful_diagnostic {
                                 rt.last_raw_payload = serde_json::to_string_pretty(&value).ok();
                             }
                             rt.snapshot = Some(snapshot.clone());
