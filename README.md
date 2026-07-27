@@ -49,6 +49,18 @@ npm run tauri:build
 
 The installer will be in `src-tauri/target/release/bundle/`.
 
+### Development checks
+
+```sh
+npm run dev:mock
+npm run verify:release
+```
+
+- `dev:mock` starts a dedicated mock UI mode with print, alert, and AMS sample data. It does not connect to a printer.
+- `tauri:dev:mock` starts the same mock UI inside the Tauri shell for window-size smoke checks.
+- `verify:release` runs the frontend build, Rust tests, and the Windows keyring feature check before packaging.
+- In the app, open **Settings → Display → AMS payload** and press **Check** to inspect the latest received printer payload used for AMS parsing.
+
 ---
 
 # Bambu Overlay（日本語）
@@ -98,3 +110,15 @@ npm run tauri:build
 ```
 
 インストーラーは `src-tauri/target/release/bundle/` に生成されます。
+
+### 開発・リリース前確認
+
+```sh
+npm run dev:mock
+npm run verify:release
+```
+
+- `dev:mock` は印刷中・アラート・AMSサンプルを使う専用モックUIです。実機には接続しません。
+- `tauri:dev:mock` は同じモックUIをTauriウィンドウで起動し、展開/格納やコンパクト表示の見切れ確認に使います。
+- `verify:release` はフロントエンドビルド、Rustテスト、Windows keyring feature確認をまとめて実行します。
+- 実機AMSの確認は **設定 → 表示 → AMS payload** の **確認** から直近payloadを見ます。
