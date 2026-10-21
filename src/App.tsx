@@ -163,7 +163,7 @@ function amsHumidityLabel(snapshot: PrinterSnapshot) {
 }
 
 function slotDetail(slot: PrinterSnapshot["amsSlots"][number]) {
-  if (slot.empty) return "Empty";
+  if (slot.empty) return "空";
   const parts = [slot.filamentType || "Filament"];
   if (slot.subBrand) parts.push(slot.subBrand);
   return parts.join(" · ");
@@ -572,7 +572,7 @@ export default function App() {
                     <span className="meta-value">{formatFinishTime(displaySnapshot.remainingMinutes)}</span>
                   </span>
                   <span className="meta-row">
-                    <span className="meta-label">Layer</span>
+                    <span className="meta-label">レイヤー</span>
                     <span className="meta-value">{formatLayerCount(displaySnapshot.currentLayer, displaySnapshot.totalLayers)}</span>
                   </span>
                 </>
@@ -634,7 +634,7 @@ export default function App() {
             <section className="ams-panel">
               <div className="section-title">
                 <span>AMS</span>
-                <small>{humidityLabel ?? (displaySnapshot.amsSlots.length === 0 ? "not detected" : undefined)}</small>
+                <small>{humidityLabel ?? (displaySnapshot.amsSlots.length === 0 ? "未検出" : undefined)}</small>
               </div>
               <div className="ams-grid">
                 {displaySnapshot.amsSlots.length === 0 ? (

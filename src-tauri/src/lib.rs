@@ -183,7 +183,7 @@ async fn save_cloud_profile(
         .pending_cloud
         .clone()
         .filter(|session| session.id == input.session_id)
-        .ok_or_else(|| "Cloud login session expired. Log in again.".to_string())?;
+        .ok_or_else(|| "Cloudログインセッションの有効期限が切れました。再度ログインしてください。".to_string())?;
     let device_id = input.device_id.trim().to_owned();
     let existing = runtime
         .store
@@ -258,7 +258,7 @@ async fn connect_profile(
             .iter()
             .find(|profile| profile.id == profile_id)
             .cloned()
-            .ok_or_else(|| "Profile not found.".to_string())?;
+            .ok_or_else(|| "プロファイルが見つかりません。".to_string())?;
         (profile, runtime.store.preferences.clone())
     };
     let secret = state
@@ -274,7 +274,7 @@ async fn connect_profile(
             .iter()
             .any(|profile| profile.id == profile_id)
         {
-            return Err("Profile not found.".to_string());
+            return Err("プロファイルが見つかりません。".to_string());
         }
         runtime.store.selected_profile_id = Some(profile_id.clone());
         save_store(&runtime.store).map_err(|error| error.to_string())?;
@@ -313,7 +313,7 @@ async fn delete_profile(
         .profiles
         .retain(|profile| profile.id != profile_id);
     if runtime.store.profiles.len() == before {
-        return Err("Profile not found.".to_string());
+        return Err("プロファイルが見つかりません。".to_string());
     }
 
     if runtime.store.selected_profile_id.as_deref() == Some(&profile_id) {
